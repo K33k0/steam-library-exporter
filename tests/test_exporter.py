@@ -110,10 +110,11 @@ class ExportTests(unittest.TestCase):
 
     def test_rate_limit_retry(self):
         client = SteamClient('secret', retries=1, delay=0)
-        with patch('steam_exporter.urlopen', side_effect=HTTPError('url', 429, '', {}, None)) as request, patch('steam_exporter.time.sleep'):
+        with patch('steam_exporter.urlopen', side_effect=HTTPError('url', 429, '', {}, None)) as request, patch.object(client.store, 'acquire'), patch.object(client.store, 'cooldown') as cooldown:
             with self.assertRaises(SteamError):
                 client.get('test')
             self.assertEqual(request.call_count, 2)
+            self.assertEqual(cooldown.call_count, 2)
 
     def test_explicit_no_stats_response(self):
         client = SteamClient('secret', retries=0, delay=0)
