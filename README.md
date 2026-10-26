@@ -22,6 +22,16 @@ python steam_exporter.py "https://steamcommunity.com/id/yourname/"
 
 Paste your API key at the hidden prompt. Output is saved to `exports/steam-library.json`. If Windows uses the Python launcher, substitute `py` for `python`.
 
+## One-click Windows launcher
+
+Double-click **Run Exporter.bat** in the extracted project folder. It finds Python 3.10+, asks for your Steam profile and hidden API key, and runs the exporter with concurrency and caching enabled. The window stays open so you can read the result. Output is `exports/steam-library.json` beside the launcher, regardless of where you launched it from.
+
+Missing details come with quick shortcuts: press Enter at the profile prompt to open [your Steam profile](https://steamcommunity.com/my/), or at the hidden key prompt to open [your Steam API key page](https://steamcommunity.com/dev/apikey). Sign in yourself if needed, then copy the profile URL or API key back into the launcher.
+
+To reuse details, copy `steam-exporter.example.json` to **steam-exporter.local.json** and fill in `profile` and optionally `api_key`. The local file is ignored by Git. An API key entered there is stored as plain text; leave it blank to keep using the hidden prompt. The launcher never saves entered details automatically.
+
+The profile uses a supplied CLI argument first, then `STEAM_PROFILE`, then local config. The key uses `STEAM_API_KEY`, then local config, then the hidden prompt. Advanced users can set `STEAM_EXPORTER_PYTHON` to a Python executable's full path, choose another config with `--config PATH`, or pass CLI options to the batch file, such as `"Run Exporter.bat" --progress-ttl 0`. If Python is missing or too old, the launcher displays installation instructions.
+
 ## Repeated and automated exports
 
 PowerShell, for the current terminal session:
@@ -32,7 +42,7 @@ $env:STEAM_PROFILE = 'https://steamcommunity.com/id/yourname/'
 python steam_exporter.py --output exports/my-library.json
 ```
 
-For unattended use, supply both `STEAM_PROFILE` and `STEAM_API_KEY` through your environment or a secret manager. The program does not read `.env` files. No key is included in the JSON or logged in request errors.
+For unattended use, supply both `STEAM_PROFILE` and `STEAM_API_KEY` through your environment or a secret manager, or use the optional local JSON config. The program does not read `.env` files. No key is included in the export JSON or logged in request errors.
 
 ```text
 python steam_exporter.py PROFILE [-o PATH] [--workers 8] [--refresh] [--strict]
@@ -105,7 +115,7 @@ When player progress is unavailable, known schema totals and definitions are ret
 
 ## Scope and limitations
 
-This exports the library Steam's Web API exposes for the account. It cannot guarantee a complete account/license inventory: private data, family-shared titles, non-Steam shortcuts, DLC/license records, and games omitted by Steam are outside the export. Steam may withhold or delay playtime and achievement information. A schema without achievement definitions is reported as `no_achievements`; this reflects the API response. Achievement failures do not remove the game from the output. The exporter does not sign into Steam or store your API key.
+This exports the library Steam's Web API exposes for the account. It cannot guarantee a complete account/license inventory: private data, family-shared titles, non-Steam shortcuts, DLC/license records, and games omitted by Steam are outside the export. Steam may withhold or delay playtime and achievement information. A schema without achievement definitions is reported as `no_achievements`; this reflects the API response. Achievement failures do not remove the game from the output. The exporter does not sign into Steam or automatically store your API key; a key you manually add to local config remains in that file.
 
 API references: [GetOwnedGames](https://partner.steamgames.com/doc/webapi/IPlayerService#GetOwnedGames), [GetSchemaForGame and GetPlayerAchievements](https://partner.steamgames.com/doc/webapi/ISteamUserStats).
 

@@ -5,3 +5,4 @@ __pycache__/
 exports/
 *.tmp
 .steam-cache/
+steam-exporter.local.json

@@ -10,6 +10,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import webbrowser
 import xml.etree.ElementTree as ET
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
@@ -260,17 +261,51 @@ def main(argv=None):
     parser.add_argument('-o', '--output', default='exports/steam-library.json')
     parser.add_argument('--language', default='english')
     parser.add_argument('--strict', action='store_true', help='Exit 2 after saving if any achievement data is unavailable')
+    parser.add_argument('--interactive', action='store_true', help='Prompt for a profile if one was not supplied')
+    parser.add_argument('--config', default='steam-exporter.local.json', help='Optional local JSON with profile and api_key')
     parser.add_argument('--workers', type=int, default=8, help='Concurrent games, 1-16 (default: 8); rate limit is shared')
     parser.add_argument('--cache-dir', default='.steam-cache', help='Cache and shared request-budget directory')
     parser.add_argument('--refresh', action='store_true', help='Fetch fresh responses, bypassing cache reads; limits still apply')
     parser.add_argument('--progress-ttl', type=int, default=300, help='Reuse player progress for this many seconds (0-86400; default: 300)')
     parser.add_argument('--schema-ttl', type=int, default=604800, help='Reuse definitions/no-stats for this many seconds (0-2592000; default: 604800)')
     args = parser.parse_args(argv)
+    config = {}
+    try:
+        if Path(args.config).exists():
+            config = json.loads(Path(args.config).read_text(encoding='utf-8-sig'))
+            if not isinstance(config, dict) or any(not isinstance(config.get(field, ''), str) for field in ('profile', 'api_key')):
+                raise ValueError('profile and api_key must be strings')
+    except (OSError, ValueError) as exc:
+        print(f'Cannot read local config: {type(exc).__name__}. Check the JSON file and its field types.', file=sys.stderr)
+        return 1
+    args.profile = args.profile or config.get('profile', '')
+    if args.interactive and not args.profile:
+        try:
+            print('Find your profile: https://steamcommunity.com/my/')
+            print('Sign in if needed, then copy the address of your profile page.')
+            args.profile = input('Paste profile URL, SteamID64, or vanity name (Enter opens profile page): ').strip()
+            if not args.profile:
+                webbrowser.open('https://steamcommunity.com/my/')
+                args.profile = input('Paste the profile page URL here: ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print('Export cancelled.', file=sys.stderr)
+            return 130
     if not args.profile:
         parser.error('provide a Steam profile or set STEAM_PROFILE')
     if not 1 <= args.workers <= 16 or not 0 <= args.progress_ttl <= 86400 or not 0 <= args.schema_ttl <= 2592000:
         parser.error('workers or cache TTL outside the allowed range')
-    key = os.getenv('STEAM_API_KEY') or getpass.getpass('Steam Web API key (hidden): ')
+    key = os.getenv('STEAM_API_KEY') or config.get('api_key', '')
+    if not key:
+        try:
+            print('Find or register your key: https://steamcommunity.com/dev/apikey')
+            print('Sign in to Steam, then copy the key shown on that page.')
+            key = getpass.getpass('Paste API key (hidden; Enter opens key page): ')
+            if not key and args.interactive:
+                webbrowser.open('https://steamcommunity.com/dev/apikey')
+                key = getpass.getpass('Paste API key (hidden): ')
+        except (EOFError, KeyboardInterrupt):
+            print('Export cancelled.', file=sys.stderr)
+            return 130
     if not key.strip():
         parser.error('a Steam Web API key is required')
     try:
