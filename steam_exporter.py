@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 import tempfile
 import time
+import xml.etree.ElementTree as ET
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import urlopen
@@ -15,6 +16,10 @@ from urllib.request import urlopen
 
 class SteamError(Exception):
     pass
+
+
+class NoStatsError(SteamError):
+    """Steam explicitly reports that this app has no statistics."""
 
 
 class SteamClient:
@@ -29,6 +34,13 @@ class SteamClient:
                 with urlopen(url, timeout=30) as response:
                     return json.load(response)
             except HTTPError as exc:
+                if exc.code == 400:
+                    try:
+                        body = json.load(exc)
+                    except (ValueError, OSError, UnicodeError):
+                        body = {}
+                    if body.get('playerstats', {}).get('error') == 'Requested app has no stats':
+                        raise NoStatsError('Requested app has no stats') from None
                 if exc.code not in (429, 500, 502, 503, 504) or attempt == self.retries:
                     raise SteamError(f'Steam returned HTTP {exc.code}') from None
                 time.sleep(min(2 ** attempt, 30))
@@ -54,6 +66,26 @@ class SteamClient:
             raise SteamError('Steam profile could not be resolved')
         return result['steamid']
 
+    def community_achievements(self, steamid, appid, language):
+        """Read public Steam Community XML when the Web API denies progress."""
+        url = f'https://steamcommunity.com/profiles/{steamid}/stats/{int(appid)}/?' + urlencode({'tab': 'achievements', 'xml': 1, 'l': language})
+        time.sleep(self.delay)
+        try:
+            with urlopen(url, timeout=30) as response:
+                root = ET.fromstring(response.read())
+        except (HTTPError, URLError, TimeoutError, OSError, ET.ParseError):
+            raise SteamError('Public Steam Community achievement data unavailable') from None
+        if root.tag != 'playerstats' or root.findtext('privacyState') != 'public' or root.findtext('player/steamID64') != steamid:
+            raise SteamError('Public Steam Community achievement data unavailable')
+        states = {}
+        for item in root.findall('achievements/achievement'):
+            name, closed = item.findtext('apiname'), item.get('closed')
+            if not name or name in states or closed not in ('0', '1'):
+                raise SteamError('Invalid Steam Community achievement data')
+            stamp = item.findtext('unlockTimestamp')
+            states[name] = {'achieved': closed == '1', 'unlocktime': int(stamp) if stamp and stamp.isdigit() else (0 if closed == '0' else None)}
+        return states
+
 
 def achievement_data(client, steamid, appid, language):
     result = {'status': 'unavailable', 'total': None, 'unlocked': None, 'completion_percent': None, 'items': []}
@@ -61,6 +93,9 @@ def achievement_data(client, steamid, appid, language):
         schema = client.get('ISteamUserStats/GetSchemaForGame/v2', appid=appid, l=language)
         game = schema.get('game')
         if not isinstance(game, dict) or not game:
+            # Empty schemas also occur for apps without stats. Require Steam's
+            # explicit no-stats response before assigning a real zero count.
+            client.get('ISteamUserStats/GetPlayerAchievements/v1', steamid=steamid, appid=appid, l=language)
             raise SteamError('Achievement schema unavailable')
         definitions = game.get('availableGameStats', {}).get('achievements', [])
         result['total'] = len(definitions)
@@ -77,8 +112,29 @@ def achievement_data(client, steamid, appid, language):
         result['items'] = [{**item, 'achieved': bool(states[item['name']]['achieved']), 'unlocktime': states[item['name']].get('unlocktime', 0)} for item in definitions]
         unlocked = sum(item['achieved'] for item in result['items'])
         result.update(status='ok', unlocked=unlocked, completion_percent=round(unlocked / len(definitions) * 100, 2))
+    except NoStatsError:
+        result.update(status='no_achievements', total=0, unlocked=0, items=[])
     except SteamError as exc:
         result['error'] = str(exc)
+        fallback = getattr(client, 'community_achievements', None)
+        if result['total'] and fallback:
+            try:
+                states = fallback(steamid, appid, language)
+                names = {item['name'] for item in result['items']}
+                if set(states) != names:
+                    # Community XML lowercases IDs for some games. Accept that
+                    # only when case folding is one-to-one on both sides.
+                    folded = {name.casefold(): value for name, value in states.items()}
+                    if len(folded) == len(states) == len(names) and len({name.casefold() for name in names}) == len(names) and set(folded) == {name.casefold() for name in names}:
+                        states = {name: folded[name.casefold()] for name in names}
+                if set(states) != {item['name'] for item in result['items']}:
+                    raise SteamError('Incomplete Steam Community achievement data')
+                result['items'] = [{**item, **states[item['name']]} for item in result['items']]
+                unlocked = sum(item['achieved'] for item in result['items'])
+                result.update(status='ok', unlocked=unlocked, completion_percent=round(unlocked / result['total'] * 100, 2), source='Steam Community XML')
+                result.pop('error')
+            except SteamError:
+                pass
     return result
 
 

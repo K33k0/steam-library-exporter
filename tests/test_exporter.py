@@ -5,7 +5,8 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from steam_exporter import SteamClient, SteamError, achievement_data, export_library, save_export
+from steam_exporter import SteamClient, SteamError, NoStatsError, achievement_data, export_library, save_export
+import io
 
 
 class FakeClient:
@@ -51,6 +52,29 @@ class ExportTests(unittest.TestCase):
         self.assertFalse(data['summary']['achievement_counts_complete'])
         self.assertEqual(data['summary']['games_with_unavailable_achievements'], 1)
 
+    def test_public_community_fallback_requires_complete_schema_match(self):
+        client = FakeClient(private=True)
+        client.community_achievements = lambda *args: {'FIRST': {'achieved': True, 'unlocktime': 100}, 'LAST': {'achieved': False, 'unlocktime': 0}}
+        stats = achievement_data(client, 'id', 1, 'english')
+        self.assertEqual(stats['status'], 'ok')
+        self.assertEqual(stats['unlocked'], 1)
+        self.assertEqual(stats['source'], 'Steam Community XML')
+        client.community_achievements = lambda *args: {'first': {'achieved': True, 'unlocktime': 100}, 'last': {'achieved': False, 'unlocktime': 0}}
+        self.assertEqual(achievement_data(client, 'id', 1, 'english')['unlocked'], 1)
+        client.community_achievements = lambda *args: {'FIRST': {'achieved': True, 'unlocktime': 100}}
+        self.assertIsNone(achievement_data(client, 'id', 1, 'english')['unlocked'])
+
+    def test_community_xml_identity_and_unlock_state(self):
+        xml = b'<playerstats><privacyState>public</privacyState><player><steamID64>123</steamID64></player><achievements><achievement closed="1"><apiname>FIRST</apiname></achievement></achievements></playerstats>'
+        client = SteamClient('secret', delay=0)
+        with patch('steam_exporter.urlopen') as request:
+            request.return_value.__enter__.return_value.read.return_value = xml
+            result = client.community_achievements('123', 1, 'english')
+            self.assertTrue(result['FIRST']['achieved'])
+            self.assertIsNone(result['FIRST']['unlocktime'])
+            with self.assertRaises(SteamError):
+                client.community_achievements('456', 1, 'english')
+
     def test_missing_schema_is_not_no_achievements(self):
         client = FakeClient()
         client.get = lambda *a, **kw: {}
@@ -90,6 +114,22 @@ class ExportTests(unittest.TestCase):
             with self.assertRaises(SteamError):
                 client.get('test')
             self.assertEqual(request.call_count, 2)
+
+    def test_explicit_no_stats_response(self):
+        client = SteamClient('secret', retries=0, delay=0)
+        body = io.BytesIO(b'{"playerstats":{"success":false,"error":"Requested app has no stats"}}')
+        with patch('steam_exporter.urlopen', side_effect=HTTPError('url', 400, '', {}, body)):
+            with self.assertRaises(NoStatsError):
+                client.get('test')
+        fake = FakeClient()
+        def response(method, **params):
+            if 'GetSchema' in method:
+                return {'game': {}}
+            raise NoStatsError('Requested app has no stats')
+        fake.get = response
+        stats = achievement_data(fake, 'id', 1, 'english')
+        self.assertEqual(stats['status'], 'no_achievements')
+        self.assertEqual((stats['total'], stats['unlocked']), (0, 0))
 
     def test_atomic_output_preserves_old_file_on_failure(self):
         with tempfile.TemporaryDirectory() as folder:

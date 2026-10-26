@@ -4,7 +4,7 @@ Export your Steam library to a reusable, UTF-8 JSON file. Runs on Windows, macOS
 
 - Every library game exposed by Steam, including unplayed titles and played free games.
 - Hours played, original playtime in minutes, and all other game fields returned by Steam.
-- Total and unlocked achievements per game, completion percentage, names, descriptions, icons, and unlock timestamps where available.
+- Total and unlocked achievements per game, completion percentage, names, descriptions, icons, and unlock timestamps where available. Public Steam Community XML is used as a fallback when the Web API withholds player progress.
 - Summary totals and explicit coverage flags when achievement data is unavailable.
 - Retries for temporary failures, hidden API-key entry, and atomic output replacement.
 
@@ -68,10 +68,10 @@ This is an illustrative game entry. `unlocktime` is Unix seconds; zero means no 
 | Status | Meaning |
 | --- | --- |
 | `ok` | Schema and complete player progress returned |
-| `no_achievements` | Available game schema has no achievement definitions; total/unlocked are zero |
+| `no_achievements` | Available schema has no achievement definitions, or Steam explicitly reports that the app has no stats; total/unlocked are zero |
 | `unavailable` | Schema or progress could not be fetched; unknown counts are `null`, with an `error` field |
 
-When player progress is unavailable, known schema totals and definitions are retained. Unknown achievement states are `null`. Summary fields ending in `_known` sum only available values; check `achievement_counts_complete` before treating them as full-library totals.
+When player progress is unavailable, known schema totals and definitions are retained. Unknown achievement states are `null`. A public Community XML fallback must match every schema achievement and the requested SteamID before its counts are accepted; these entries include `source: "Steam Community XML"`. Unlock timestamps omitted by that source remain `null` for unlocked achievements. Summary fields ending in `_known` sum only available values; check `achievement_counts_complete` before treating them as full-library totals.
 
 ## Scope and limitations
 
